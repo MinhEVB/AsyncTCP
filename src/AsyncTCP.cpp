@@ -490,6 +490,24 @@ int8_t AsyncTCP_detail::tcp_recv(void *arg, struct tcp_pcb *pcb, struct pbuf *pb
 int8_t AsyncTCP_detail::tcp_sent(void *arg, struct tcp_pcb *pcb, uint16_t len) {
   // ets_printf("+S: 0x%08x\n", pcb);
   AsyncClient *client = reinterpret_cast<AsyncClient *>(arg);
+  {
+    // Merge this ACK into the connection's last queued event if that is an
+    // ACK too. The queue has no bound, and each event is a small allocation
+    // in internal RAM: when async_tcp falls behind a fast sender, one event
+    // per ACK piled up (418 of them, 21.7 KB, during a 2.4 MB download on an
+    // ESP32-S3). ACKs are cumulative and _sent() only passes the length on.
+    queue_mutex_guard guard;
+    lwip_tcp_event_packet_t *last = nullptr;
+    for (lwip_tcp_event_packet_t *p = _async_queue.begin(); p; p = p->next) {
+      if (p->client == client) {
+        last = p;
+      }
+    }
+    if (last && last->event == LWIP_TCP_SENT && last->sent.pcb == pcb && (uint32_t)last->sent.len + len <= 0xFFFF) {
+      last->sent.len += len;
+      return ERR_OK;
+    }
+  }
   lwip_tcp_event_packet_t *e = new (std::nothrow) lwip_tcp_event_packet_t{LWIP_TCP_SENT, client};
   if (!e) {
     async_tcp_log_e("Failed to allocate event packet");

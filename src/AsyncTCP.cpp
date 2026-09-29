@@ -1187,7 +1187,15 @@ bool AsyncClient::free() {
 
 size_t AsyncClient::write(const char *data, size_t size, uint8_t apiflags) {
   size_t will_send = add(data, size, apiflags);
-  if (!will_send || !send()) {
+  if (!will_send) {
+    // write(ptr, 0) after add() of headers must still push them out now,
+    // not at the next lwIP timer (60 to 250 ms later).
+    if (size == 0) {
+      send();
+    }
+    return 0;
+  }
+  if (!send()) {
     return 0;
   }
   return will_send;
